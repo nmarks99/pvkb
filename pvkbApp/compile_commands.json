@@ -1,0 +1,31 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-D_GNU_SOURCE",
+      "-D_DEFAULT_SOURCE",
+      "-D_X86_64_",
+      "-DUNIX",
+      "-Dlinux",
+      "-O3",
+      "-Wall",
+      "-mtune=generic",
+      "-m64",
+      "-I.",
+      "-I../O.Common",
+      "-I.",
+      "-I.",
+      "-I..",
+      "-I../../include/compiler/gcc",
+      "-I../../include/os/Linux",
+      "-I../../include",
+      "-I/net/s100dserv/APSshare/epics/base-7.0.8/include/compiler/gcc",
+      "-I/net/s100dserv/APSshare/epics/base-7.0.8/include/os/Linux",
+      "-I/net/s100dserv/APSshare/epics/base-7.0.8/include",
+      "-c",
+      "../pvkb.cpp"
+    ],
+    "directory": "/home/beams0/NMARKS/devel/pvkb/pvkbApp/O.rhel9-x86_64",
+    "file": "/home/beams0/NMARKS/devel/pvkb/pvkbApp/pvkb.cpp"
+  }
+]
