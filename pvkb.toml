@@ -6,5 +6,7 @@ prefix = "namSoft:"
 provider = "ca"
 
 [keybindings]
-key_right = {pv="m1.TWF", value="1"}
-key_left = {pv="m1.TWR", value="1"}
+key_a = {pv="m1.RBV", value=1}
+key_b = {pv="m2.RBV", value=1}
+# key_right = {pv="m1.TWF", value=1}
+# key_left = {pv="m1.TWR", value=1}

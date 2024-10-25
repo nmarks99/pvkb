@@ -1,3 +1,5 @@
+.cache/
+
 # Install directories
 /bin/
 /cfg/
