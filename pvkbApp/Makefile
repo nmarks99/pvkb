@@ -7,9 +7,9 @@ include $(TOP)/configure/CONFIG
 PROD_LIBS += pvAccessCA ca pvAccess pvData Com
 
 PROD_HOST += pvkb
-main_SRCS += pvkb.cpp
-main_LIBS += $(EPICS_BASE_HOST_LIBS)
-main_SYS_LIBS += ncurses
+pvkb_SRCS += pvkb.cpp
+pvkb_LIBS += $(EPICS_BASE_HOST_LIBS)
+pvkb_SYS_LIBS += ncurses
 
 include $(TOP)/configure/RULES
 #----------------------------------------
