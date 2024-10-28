@@ -6,11 +6,11 @@ provider = "ca"
 
 # Execute these CA/PVA puts at the start of the program
 [put]
-"m1.DESC" = "desc field"
-"m1.HLM" = 132.44
+"m1.DESC" = "My Motor"
+"m1.HLM" = 999.9
 
 [keybindings]
 key_right = {pv="m1.TWF", value=1}
-key_left = {pv="m1.TWR", value=1} 
-key_1 = {pv="m1.DESC", value="one"} 
-key_2 = {pv="m1.DESC", value="two"} 
+key_left = {pv="m1.TWR", value=1}
+key_up = {pv="m1.TWV", value=0.1, increment=true}
+key_down = {pv="m1.TWV", value=-0.1, increment=true}

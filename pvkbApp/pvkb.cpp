@@ -1,6 +1,5 @@
 #include <cctype>
 #include <iostream>
-#include <new>
 #include <stdexcept>
 #include <string>
 #include <optional>
@@ -13,7 +12,7 @@
 #include <pv/caProvider.h>
 
 #include "toml++/toml.hpp"
-#include "argh.h"
+// #include "argh.h"
 
 
 std::optional<char> to_key_char(const std::string_view str) {
@@ -47,7 +46,7 @@ std::optional<char> to_key_char(const std::string_view str) {
 }
 
 using VarType = std::variant<int, double, bool, std::string>;
-using TupleVal = std::tuple<pvac::ClientChannel, VarType>;
+using TupleVal = std::tuple<pvac::ClientChannel, VarType, bool>;
 
 std::optional<std::string> get_pv_scalar_type(pvac::ClientChannel &channel) {
     auto pvd_scalar_type = std::dynamic_pointer_cast<const epics::pvData::Scalar>(
@@ -164,8 +163,15 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	    throw std::runtime_error(err_ss.str());
 	}
 
+	// Get flag for increment mode (default: false)
+	// only support for numbers
+	bool increment = false;
+	if (var_type == "int" or var_type == "double") {
+	    increment = keybind["increment"].value<bool>().value_or(false);
+	}
+
 	// add the key char, channel, and PV value to the map
-	channel_map[key_char.value()] = std::make_tuple(channel, pv_val.value());
+	channel_map[key_char.value()] = std::make_tuple(channel, pv_val.value(), increment);
     }
     return channel_map;
 }
@@ -228,7 +234,7 @@ int main(int argc, char *argv[]) {
     // Execute requested puts before running main loop
     do_prelim_puts(tbl, provider, ioc_prefix);
     
-    // Get the mapping key_char -> (pv channel, pv value to write)
+    // Get the mapping key_char -> (pv channel, pv value, increment=true/false)
     std::map<char, TupleVal> channel_map = parse_keybindings(tbl, provider, ioc_prefix);
 
     // initialize ncurses
@@ -241,17 +247,33 @@ int main(int argc, char *argv[]) {
 	if (ch == 'q') {
 	    break;
 	}
+
 	if (channel_map.count(ch) > 0) {
 	    pvac::ClientChannel channel = std::get<0>(channel_map[ch]);
 	    VarType val_vnt = std::get<1>(channel_map[ch]);
 	    const std::optional<std::string> var_type_str = get_variant_type(val_vnt);
-	    if (var_type_str == "int") {
-		channel.put().set("value", static_cast<int>(std::get<int>(val_vnt))).exec();
-	    } else if (var_type_str == "double") {
-		channel.put().set("value", static_cast<double>(std::get<double>(val_vnt))).exec();
-	    } else if (var_type_str == "string") {
-		channel.put().set("value", static_cast<std::string>(std::get<std::string>(val_vnt))).exec();
+	    
+	    // increment mode
+	    if (std::get<2>(channel_map[ch])) {
+		if (var_type_str == "int") {
+		    const int current_val = channel.get()->getSubFieldT<epics::pvData::PVInt>("value")->getAs<int>();
+		    const int inc_val = std::get<int>(val_vnt);
+		    channel.put().set("value", current_val + inc_val).exec();
+		} else if (var_type_str == "double") {
+		    const double current_val = channel.get()->getSubFieldT<epics::pvData::PVDouble>("value")->getAs<double>();
+		    const double inc_val = std::get<double>(val_vnt);
+		    channel.put().set("value", current_val + inc_val).exec();
+		} 
+	    } else { // standard write mode
+		if (var_type_str == "int") {
+		    channel.put().set("value", std::get<int>(val_vnt)).exec();
+		} else if (var_type_str == "double") {
+		    channel.put().set("value", std::get<double>(val_vnt)).exec();
+		} else if (var_type_str == "string") {
+		    channel.put().set("value", std::get<std::string>(val_vnt)).exec();
+		}
 	    }
+
 	}
 	
 	refresh();
