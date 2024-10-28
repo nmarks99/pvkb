@@ -1,10 +1,15 @@
 # Default IOC prefix used for all bindings
-# unless explcitly overriden
 prefix = "namSoft:"
 
 # Can use either PV Access (pva) or Channel Access (ca)
 provider = "ca"
 
+# Execute these CA/PVA puts at the start of the program
+[put]
+m1.DESC = "hello world"
+
 [keybindings]
-key_right = {pv="m1.TWF"} # no value just means trigger
-key_left = {pv="m1.TWR"} 
+key_right = {pv="m1.TWF", value=1}
+key_left = {pv="m1.TWR", value=1} 
+key_1 = {pv="m1.DESC", value="one"} 
+key_2 = {pv="m1.DESC", value="two"} 
