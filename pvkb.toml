@@ -6,7 +6,8 @@ provider = "ca"
 
 # Execute these CA/PVA puts at the start of the program
 [put]
-m1.DESC = "hello world"
+"m1.DESC" = "desc field"
+"m1.HLM" = 132.44
 
 [keybindings]
 key_right = {pv="m1.TWF", value=1}

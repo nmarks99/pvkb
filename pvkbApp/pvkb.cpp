@@ -1,5 +1,6 @@
 #include <cctype>
 #include <iostream>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <optional>
@@ -45,21 +46,10 @@ std::optional<char> to_key_char(const std::string_view str) {
     }
 }
 
+using VarType = std::variant<int, double, bool, std::string>;
+using TupleVal = std::tuple<pvac::ClientChannel, VarType>;
 
-// possible scalar types:
-// boolean  // true or false
-// byte     // 8 bit signed integer
-// ubyte    // 8 bit unsigned integer
-// short    // 16 bit signed integer
-// ushort   // 16 bit unsigned integer
-// int      // 32 bit signed integer
-// uint     // 32 bit unsigned integer
-// long     // 64 bit signed integer
-// ulong    // 64 bit unsigned integer
-// float    // single precision IEEE 754
-// double   // double precision IEEE 754
-// string   // UTF-8 *
-std::optional<std::string> get_scalar_type(pvac::ClientChannel &channel) {
+std::optional<std::string> get_pv_scalar_type(pvac::ClientChannel &channel) {
     auto pvd_scalar_type = std::dynamic_pointer_cast<const epics::pvData::Scalar>(
 	channel.get()->getStructure()->getField("value"))->getScalarType();
     if (pvd_scalar_type) {
@@ -69,37 +59,75 @@ std::optional<std::string> get_scalar_type(pvac::ClientChannel &channel) {
     }
 }
 
-using VarType = std::variant<int, double, std::string>;
-using TupleVal = std::tuple<pvac::ClientChannel, VarType>;
+std::optional<std::string> get_variant_type(const VarType& value) {
+    std::string result;
+    auto visitor = [&](auto&& arg) {
+        using T = std::decay_t<decltype(arg)>; // Get the type of the argument
+        if constexpr (std::is_same_v<T, int>) {
+	    result = "int";
+        } else if constexpr (std::is_same_v<T, double>) {
+	    result = "double";
+        } else if constexpr (std::is_same_v<T, bool>) {
+	    result = "bool";
+        } else if constexpr (std::is_same_v<T, std::string>) {
+	    result = "string";
+        }
+    };
+    std::visit(visitor, value);
+    return result.length() > 0 ? std::optional<std::string>(result) : std::nullopt;
+}
+
+
+bool check_type_match(const std::string &pv_scalar_type, const std::string &var_type) {
+
+    bool type_match = true;
+
+    if (pv_scalar_type == "float" || pv_scalar_type == "double") {
+	type_match = (var_type == "double" || var_type == "int");
+    } else if (pv_scalar_type == "boolean") {
+	type_match = (var_type == "bool");
+    } else if (pv_scalar_type == "string") {
+	type_match = (var_type == "string");
+    } else {
+	type_match = (var_type == "int");
+    } 
+
+    return type_match;
+}
+
+
+std::optional<VarType> extract_variant_value(const toml::node &node) {
+    if (node.is_string()) {
+	return *node.value<std::string>();
+    } else if (node.is_integer()) {
+	return *node.value<int>();
+    } else if (node.is_floating_point()) {
+	return *node.value<double>();
+    } else if (node.is_boolean()) {
+	return *node.value<bool>();
+    } else {
+	return std::nullopt;
+    }
+}
+
 
 std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientProvider &provider, const std::string &ioc_prefix) {
     std::stringstream err_ss;
     std::map<char, TupleVal> channel_map;
 
-    auto get_variant_value = [](const toml::table &keybind) -> std::optional<VarType> {
-	if (keybind["value"].is_string()) {
-	    return *keybind["value"].value<std::string>();
-	} else if (keybind["value"].is_integer()) {
-	    return *keybind["value"].value<int>();
-	} else if (keybind["value"].is_floating_point()) {
-	    return *keybind["value"].value<double>();
-	} else if (keybind["value"].is_boolean()) {
-	    return *keybind["value"].value<bool>();
-	} else {
-	    return std::nullopt;
-	}
-    };
-
     // get all the keybindings and construct the map
     for (const auto &[key, value] : *tbl["keybindings"].as_table()) {
 	const auto keybind = *value.as_table();
+
+	// Get the name of the PV to write to
 	const std::optional<std::string> pv_name = keybind["pv"].value<std::string>();
 	if (not pv_name.has_value()) {
 	    err_ss.clear();
 	    err_ss << "Missing or invalid PV name in keybind " << "'" << key << "'" << std::endl;
 	    throw std::runtime_error(err_ss.str());
 	}
-
+    
+	// Get the char for the cooresponding key for ncurses 
 	std::optional<char> key_char = to_key_char(key);
 	if (not key_char.has_value()) {
 	    err_ss.clear();
@@ -111,13 +139,28 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	// FIX: handle connection errors
 	pvac::ClientChannel channel(provider.connect(ioc_prefix + pv_name.value()));
 
-	// FIX: get scalar type of PV, assert variant value (toml) is same type
-	// std::optional<std::string> scalar_type = get_scalar_type(channel);
+	// Get scalar type of PV
+	// TODO: support more PV types (enum)
+	std::optional<std::string> pv_scalar_type = get_pv_scalar_type(channel);
+	if (not pv_scalar_type.has_value()) {
+	    err_ss.clear();
+	    err_ss << "PV " << pv_name.value() << " is not a scalar type" << std::endl;
+	    throw std::runtime_error(err_ss.str());
+	}
 
-	std::optional<VarType> pv_val = get_variant_value(keybind);
+	// Get variant type of desired PV value
+	std::optional<VarType> pv_val = extract_variant_value(*keybind["value"].node());
 	if (not pv_val.has_value()) {
 	    err_ss.clear();
 	    err_ss << "Invalid value for key " << "'" << key << "'" << std::endl;
+	    throw std::runtime_error(err_ss.str());
+	}
+	std::optional<std::string> var_type = get_variant_type(pv_val.value());
+    
+	// Ensure desired value type matches PV type
+	if (not check_type_match(pv_scalar_type.value(), var_type.value())) {
+	    err_ss.clear();
+	    err_ss << "Type mismatch for key " << "'" << key << "'" << std::endl;
 	    throw std::runtime_error(err_ss.str());
 	}
 
@@ -127,22 +170,36 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
     return channel_map;
 }
 
-std::string get_variant_type(const VarType& value) {
-    std::string result;
-    auto visitor = [&](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>; // Get the type of the argument
-        if constexpr (std::is_same_v<T, int>) {
-	    result = "int";
-        } else if constexpr (std::is_same_v<T, double>) {
-	    result = "double";
-        } else if constexpr (std::is_same_v<T, std::string>) {
-	    result = "string";
-        }
-    };
-    std::visit(visitor, value);
-    return result;
-}
+void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, const std::string &ioc_prefix) {
+    std::stringstream err_ss;
 
+    for (const auto &[key, value] : *tbl["put"].as_table()) {
+	const std::optional<VarType> val = extract_variant_value(value);
+	if (not val.has_value()) {
+	    err_ss.clear();
+	    err_ss << "Invalid value for put: " << "'" << key << "'" << std::endl;
+	    throw std::runtime_error(err_ss.str());
+	}
+
+	pvac::ClientChannel channel(provider.connect(ioc_prefix + std::string(key)));
+
+	std::optional<std::string> var_type = get_variant_type(val.value()); 
+	std::optional<std::string> pv_scalar_type = get_pv_scalar_type(channel);
+	if (not check_type_match(pv_scalar_type.value(), var_type.value())) {
+	    err_ss << "Type mismatch for put: " << "'" << key << "'" << std::endl;
+	    throw std::runtime_error(err_ss.str());
+	}
+
+	if (var_type == "int") {
+	    channel.put().set("value", static_cast<int>(std::get<int>(val.value()))).exec();
+	} else if (var_type == "double") {
+	    channel.put().set("value", static_cast<double>(std::get<double>(val.value()))).exec();
+	} else if (var_type == "string") {
+	    channel.put().set("value", static_cast<std::string>(std::get<std::string>(val.value()))).exec();
+	}
+    }
+
+}
 
 int main(int argc, char *argv[]) {
 
@@ -167,6 +224,9 @@ int main(int argc, char *argv[]) {
 
     // Get the IOC prefix
     std::string ioc_prefix = tbl["prefix"].value_or("");
+
+    // Execute requested puts before running main loop
+    do_prelim_puts(tbl, provider, ioc_prefix);
     
     // Get the mapping key_char -> (pv channel, pv value to write)
     std::map<char, TupleVal> channel_map = parse_keybindings(tbl, provider, ioc_prefix);
@@ -184,18 +244,15 @@ int main(int argc, char *argv[]) {
 	if (channel_map.count(ch) > 0) {
 	    pvac::ClientChannel channel = std::get<0>(channel_map[ch]);
 	    VarType val_vnt = std::get<1>(channel_map[ch]);
-	    const std::string var_type_str = get_variant_type(val_vnt);
+	    const std::optional<std::string> var_type_str = get_variant_type(val_vnt);
 	    if (var_type_str == "int") {
 		channel.put().set("value", static_cast<int>(std::get<int>(val_vnt))).exec();
 	    } else if (var_type_str == "double") {
 		channel.put().set("value", static_cast<double>(std::get<double>(val_vnt))).exec();
 	    } else if (var_type_str == "string") {
 		channel.put().set("value", static_cast<std::string>(std::get<std::string>(val_vnt))).exec();
-	    } else {
-		printw("Hmm...");
 	    }
 	}
-    
 	
 	refresh();
     }
