@@ -1,4 +1,5 @@
 #include <cctype>
+#include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -48,7 +49,7 @@ std::optional<char> to_key_char(const std::string_view str) {
 using VarType = std::variant<int, double, bool, std::string>;
 using TupleVal = std::tuple<pvac::ClientChannel, VarType, bool>;
 
-std::optional<std::string> get_pv_scalar_type(pvac::ClientChannel &channel) {
+std::optional<std::string> get_scalar_pv_type(pvac::ClientChannel &channel) {
     auto pvd_scalar_type = std::dynamic_pointer_cast<const epics::pvData::Scalar>(
 	channel.get()->getStructure()->getField("value"))->getScalarType();
     if (pvd_scalar_type) {
@@ -56,6 +57,16 @@ std::optional<std::string> get_pv_scalar_type(pvac::ClientChannel &channel) {
     } else {
 	return std::nullopt;
     }
+}
+
+std::optional<std::string> get_pv_type(pvac::ClientChannel &channel) {
+    std::optional<std::string> type_str;
+    try {
+	type_str = channel.get()->getStructure()->getField("value")->getID();
+    } catch (const std::exception &e) {
+	type_str = std::nullopt;	
+    }
+    return type_str;
 }
 
 std::optional<std::string> get_variant_type(const VarType& value) {
@@ -77,15 +88,15 @@ std::optional<std::string> get_variant_type(const VarType& value) {
 }
 
 
-bool check_type_match(const std::string &pv_scalar_type, const std::string &var_type) {
+bool check_type_match(const std::string &pv_type, const std::string &var_type) {
 
     bool type_match = true;
 
-    if (pv_scalar_type == "float" || pv_scalar_type == "double") {
+    if (pv_type == "float" || pv_type == "double") {
 	type_match = (var_type == "double" || var_type == "int");
-    } else if (pv_scalar_type == "boolean") {
+    } else if (pv_type == "boolean") {
 	type_match = (var_type == "bool");
-    } else if (pv_scalar_type == "string") {
+    } else if (pv_type == "string") {
 	type_match = (var_type == "string");
     } else {
 	type_match = (var_type == "int");
@@ -135,15 +146,21 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	}
 
 	// create channel for the pv
-	// FIX: handle connection errors
-	pvac::ClientChannel channel(provider.connect(ioc_prefix + pv_name.value()));
-
-	// Get scalar type of PV
-	// TODO: support more PV types (enum)
-	std::optional<std::string> pv_scalar_type = get_pv_scalar_type(channel);
-	if (not pv_scalar_type.has_value()) {
+	pvac::ClientChannel channel;
+	try {
+	    channel = pvac::ClientChannel(provider.connect(ioc_prefix + pv_name.value()));
+	} catch (const std::exception &e) {
 	    err_ss.clear();
-	    err_ss << "PV " << pv_name.value() << " is not a scalar type" << std::endl;
+	    err_ss << e.what() << std::endl;
+	    err_ss << "Failed to connect to pv" << "'" << (ioc_prefix + pv_name.value()) << "'" << std::endl;
+	    throw std::runtime_error(err_ss.str());
+	}
+
+	// Get type of PV
+	std::optional<std::string> pv_type = get_pv_type(channel);
+	if (not pv_type.has_value()) {
+	    err_ss.clear();
+	    err_ss << "PV " << pv_name.value() << " is not a valid type " << "'" << pv_type.value() << "'" << std::endl;
 	    throw std::runtime_error(err_ss.str());
 	}
 
@@ -157,7 +174,7 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	std::optional<std::string> var_type = get_variant_type(pv_val.value());
     
 	// Ensure desired value type matches PV type
-	if (not check_type_match(pv_scalar_type.value(), var_type.value())) {
+	if (not check_type_match(pv_type.value(), var_type.value())) {
 	    err_ss.clear();
 	    err_ss << "Type mismatch for key " << "'" << key << "'" << std::endl;
 	    throw std::runtime_error(err_ss.str());
@@ -190,14 +207,18 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
 	pvac::ClientChannel channel(provider.connect(ioc_prefix + std::string(key)));
 
 	std::optional<std::string> var_type = get_variant_type(val.value()); 
-	std::optional<std::string> pv_scalar_type = get_pv_scalar_type(channel);
-	if (not check_type_match(pv_scalar_type.value(), var_type.value())) {
+	std::optional<std::string> pv_type = get_pv_type(channel);
+	if (not check_type_match(pv_type.value(), var_type.value())) {
 	    err_ss << "Type mismatch for put: " << "'" << key << "'" << std::endl;
 	    throw std::runtime_error(err_ss.str());
 	}
 
 	if (var_type == "int") {
-	    channel.put().set("value", static_cast<int>(std::get<int>(val.value()))).exec();
+	    if (pv_type.value() == "enum_t") {
+		channel.put().set("value.index", std::get<int>(val.value())).exec();
+	    }  else {
+		channel.put().set("value", std::get<int>(val.value())).exec();
+	    }
 	} else if (var_type == "double") {
 	    channel.put().set("value", static_cast<double>(std::get<double>(val.value()))).exec();
 	} else if (var_type == "string") {
@@ -251,6 +272,7 @@ int main(int argc, char *argv[]) {
 	if (channel_map.count(ch) > 0) {
 	    pvac::ClientChannel channel = std::get<0>(channel_map[ch]);
 	    VarType val_vnt = std::get<1>(channel_map[ch]);
+	    const std::optional<std::string> pv_type_str = get_pv_type(channel);
 	    const std::optional<std::string> var_type_str = get_variant_type(val_vnt);
 	    
 	    // increment mode
@@ -266,7 +288,11 @@ int main(int argc, char *argv[]) {
 		} 
 	    } else { // standard write mode
 		if (var_type_str == "int") {
-		    channel.put().set("value", std::get<int>(val_vnt)).exec();
+		    if (pv_type_str == "enum_t") {
+			channel.put().set("value.index", std::get<int>(val_vnt)).exec();
+		    } else {
+			channel.put().set("value", std::get<int>(val_vnt)).exec();
+		    }
 		} else if (var_type_str == "double") {
 		    channel.put().set("value", std::get<double>(val_vnt)).exec();
 		} else if (var_type_str == "string") {

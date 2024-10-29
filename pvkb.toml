@@ -7,7 +7,8 @@ provider = "ca"
 # Execute these CA/PVA puts at the start of the program
 [put]
 "m1.DESC" = "My Motor"
-"m1.HLM" = 999.9
+"m1.HLM" = 100
+"m1.SPMG" = 3 # Go
 
 [keybindings]
 key_right = {pv="m1.TWF", value=1}
