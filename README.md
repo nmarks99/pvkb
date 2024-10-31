@@ -9,6 +9,7 @@ Dependencies:
 - pvAccessCPP (probably just through EPICS Base installation)
 - ncurses
 
+Build:  
 1. On a system with EPICS base installed, correct the path to EPICS_BASE in the
 configure/RELEASE file.
 2. Run `make`. The binary will be installed in bin/\<EPICS_HOST_ARCH\>
