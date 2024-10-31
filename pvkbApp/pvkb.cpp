@@ -267,8 +267,7 @@ int main(int argc, char *argv[]) {
     
     // Get the mapping key_char -> (pv channel, pv value, increment=true/false)
     std::map<char, TupleVal> channel_map = parse_keybindings(tbl, provider, ioc_prefix);
-    return 1;
-
+    
     // initialize ncurses
     initscr();
     keypad(stdscr, TRUE);
