@@ -5,6 +5,9 @@ Command line tool to control arbitrary EPICS PVs with your computer keyboard
 with keybindings specified in a TOML file.
 
 ## Installation
+Dependencies:
+- pvAccessCPP (probably just through EPICS Base installation)
+- ncurses
 
 1. On a system with EPICS base installed, correct the path to EPICS_BASE in the
 configure/RELEASE file.
