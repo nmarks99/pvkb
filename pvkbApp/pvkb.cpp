@@ -130,78 +130,71 @@ std::optional<VarType> extract_variant_value(const toml::node &node) {
 std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientProvider &provider, const std::string &ioc_prefix) {
     std::stringstream err_ss;
     std::map<char, TupleVal> channel_map;
-
-    for (const auto &[key, value] : *tbl["keybindings"].as_table()) {
-	// key is for example 'key_right'
-	// value is for example '{pv="m1.TWF", value=1}'
-	const auto keybind = *value.as_table();
-
-	// Get the name of the PV to write to
-	err_ss.clear();
-	err_ss << "Missing or invalid PV name in keybind " << "'" << key << "'" << std::endl;
-	std::string pv_name = expect(keybind["pv"].value<std::string>(), err_ss.str());
     
-	// Get the char for the cooresponding key for ncurses 
-	err_ss.clear();
-	err_ss << "Invalid key " << "'" << key << "'" << std::endl;
-	const char key_char = expect(to_key_char(key), err_ss.str());
+    if (auto keybindings_tbl = tbl["keybindings"].as_table()) {
+	for (const auto &[key, value] : *keybindings_tbl) {
+	    // key is e.g. 'key_right'
+	    // value is e.g. '{pv="m1.TWF", value=1}'
+	    std::cout << key << ": ";
+	    std::cout << *value.as_table() << std::endl;
+	    const auto keybind = *value.as_table();
 
-	// Create channel for the pv
-	pvac::ClientChannel channel;
-	pv_name =  ioc_prefix + pv_name;
-	try {
-	    channel = pvac::ClientChannel(provider.connect(pv_name));
-	    std::cout << "Connected to " << channel.name() << std::endl;
-	} catch (const std::exception &e) {
-	    err_ss.clear();
-	    err_ss << e.what() << std::endl;
-	    err_ss << "Failed to connect to pv" << "'" << pv_name << "'" << std::endl;
-	    throw std::runtime_error(err_ss.str());
+	    // Get the name of the PV to write to
+	    std::string pv_name = expect(keybind["pv"].value<std::string>(), "Missing or invalid PV name");
+	
+	    // Create channel for the pv
+	    pvac::ClientChannel channel;
+	    pv_name =  ioc_prefix + pv_name;
+	    try {
+		channel = pvac::ClientChannel(provider.connect(pv_name));
+		channel.get();
+		std::cout << "Connected to " << channel.name() << std::endl;
+	    } catch (const std::exception &e) {
+		throw std::runtime_error("Failed to connect to PV");
+	    }
+
+	    // Get the char for the cooresponding key for ncurses 
+	    const char key_char = expect(to_key_char(key), "Invalid key");
+
+	    // Get type of PV
+	    const std::string pv_type = expect(get_pv_type(channel),"PV is not a supported type");
+
+	    // Get variant value pv target value from toml node
+	    VarType pv_val = expect(extract_variant_value(*keybind["value"].node()), "Invalid value");
+	    const std::string var_type = expect(get_variant_type(pv_val),
+					 "get_variant_type() failed. Check type of pv value");
+	
+	    // Ensure desired value type matches PV type
+	    if (not check_type_match(pv_type, var_type)) {
+		throw std::runtime_error("Type mismatch between target value and PV value");
+	    }
+
+	    // Get flag for increment mode (default: false)
+	    // only supported for numbers, not strings
+	    bool increment = false;
+	    if (var_type == "int" or var_type == "double") {
+		increment = keybind["increment"].value<bool>().value_or(false);
+	    }
+
+	    // add keybinding to the map
+	    channel_map[key_char] = std::make_tuple(channel, pv_val, increment);
 	}
-
-	// Get type of PV
-	err_ss.clear();
-	err_ss << "PV " << pv_name << " is not a supported type" << std::endl;
-	const std::string pv_type = expect(get_pv_type(channel),err_ss.str());
-
-	// Get variant value pv target value from toml node
-	err_ss.clear();
-	err_ss << "Invalid value for key " << "'" << key << "'" << std::endl;
-	VarType pv_val = expect(
-	    extract_variant_value(*keybind["value"].node()),
-	    err_ss.str()
-	);
-	const std::string var_type = expect(get_variant_type(pv_val), "get_variant_type() failed. Check type of pv value");
-    
-	// Ensure desired value type matches PV type
-	if (not check_type_match(pv_type, var_type)) {
-	    err_ss.clear();
-	    err_ss << "Type mismatch for key " << "'" << key << "'" << std::endl;
-	    throw std::runtime_error(err_ss.str());
-	}
-
-	// Get flag for increment mode (default: false)
-	// only supported for numbers, not strings
-	bool increment = false;
-	if (var_type == "int" or var_type == "double") {
-	    increment = keybind["increment"].value<bool>().value_or(false);
-	}
-
-	// add keybinding to the map
-	channel_map[key_char] = std::make_tuple(channel, pv_val, increment);
+    } else {
+	throw std::runtime_error("No keybindings section in TOML file");
     }
+
     return channel_map;
 }
 
 // Executes the ca/pva puts to the PVs specfied in the put array in toml file
 void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, const std::string &ioc_prefix) {
-    std::stringstream err_ss;
     if (auto put_array = tbl["put"].as_array()) {
 	for (const auto &item: *put_array) {
 	    if (auto table = item.as_table()) {
+		std::cout << *table << std::endl;
 		
 		// Get the PV name
-		std::string pv_name = expect(table->get("pv")->value<std::string>(),"Bad or missing PV name in put list");
+		std::string pv_name = expect(table->get("pv")->value<std::string>(),"Bad or missing PV name");
 		pv_name = ioc_prefix + pv_name;
 
 		// Get the PV target value
@@ -214,25 +207,17 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
 		pvac::ClientChannel channel;
 		try {
 		    channel = pvac::ClientChannel(provider.connect(pv_name));
+		    channel.get();
 		    std::cout << "Connected to " << channel.name() << std::endl;
 		} catch (const std::exception &e) {
-		    err_ss.clear();
-		    err_ss << e.what() << std::endl;
-		    err_ss << "Failed to connect to pv" << "'" << pv_name << "'" << std::endl;
-		    throw std::runtime_error(err_ss.str());
+		    throw std::runtime_error("Failed to connect to PV");
 		}
 		
 		// Check type match
-		err_ss.clear();
-		err_ss << "Invalid type for PV " << pv_name << " in put list" << std::endl;
-		std::string pv_type = expect(get_pv_type(channel), err_ss.str());
-		err_ss.clear();
-		err_ss << "Invalid value given for PV " << pv_name << " in put list" << std::endl;
-		std::string var_type = expect(get_variant_type(val), err_ss.str()); 
+		std::string pv_type = expect(get_pv_type(channel), "Invalid PV type");
+		std::string var_type = expect(get_variant_type(val), "Invalid value type"); 
 		if (not check_type_match(pv_type, var_type)) {
-		    err_ss.clear();
-		    err_ss << "Type mismatch for put to " << pv_name << std::endl;
-		    throw std::runtime_error(err_ss.str());
+		    throw std::runtime_error("Type mismatch between target value and PV value");
 		}
 
 		if (var_type == "int") {
@@ -282,6 +267,7 @@ int main(int argc, char *argv[]) {
     
     // Get the mapping key_char -> (pv channel, pv value, increment=true/false)
     std::map<char, TupleVal> channel_map = parse_keybindings(tbl, provider, ioc_prefix);
+    return 1;
 
     // initialize ncurses
     initscr();
@@ -297,8 +283,6 @@ int main(int argc, char *argv[]) {
 	if (channel_map.count(ch) > 0) {
 	    pvac::ClientChannel channel = std::get<0>(channel_map[ch]);
 	    VarType val_vnt = std::get<1>(channel_map[ch]);
-	    // const std::optional<std::string> pv_type_str = get_pv_type(channel);
-	    // const std::optional<std::string> var_type_str = get_variant_type(val_vnt);
 	    const std::string pv_type_str = expect(get_pv_type(channel), "Failed to get pv_type_str");
 	    const std::string var_type_str = expect(get_variant_type(val_vnt), "Failed to get var_type_str");
 	    
