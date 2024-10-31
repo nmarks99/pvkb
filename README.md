@@ -9,6 +9,7 @@ Dependencies:
 - pvAccessCPP (probably just through EPICS Base installation)
 - ncurses
 
+Build:  
 1. On a system with EPICS base installed, correct the path to EPICS_BASE in the
 configure/RELEASE file.
 2. Run `make`. The binary will be installed in bin/\<EPICS_HOST_ARCH\>
@@ -64,7 +65,9 @@ prefix:m1.TWV by +0.1, and the down arrow is set to increment prefix:m1.TWV by -
 ## Usage
 
 For example, to run `pvkb` with the example TOML configuration file, run:
-`pvkb example.toml`
+```
+pvkb example.toml
+```
 
 While the program is running, keypresses will only be caught when the terminal window where you ran the program is active.
 To stop the program at any time, simple type the `q` key.
