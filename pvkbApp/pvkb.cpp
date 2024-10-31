@@ -151,6 +151,7 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	pv_name =  ioc_prefix + pv_name;
 	try {
 	    channel = pvac::ClientChannel(provider.connect(pv_name));
+	    std::cout << "Connected to " << channel.name() << std::endl;
 	} catch (const std::exception &e) {
 	    err_ss.clear();
 	    err_ss << e.what() << std::endl;
@@ -209,8 +210,17 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
 		    "Bad or missing value in put list"
 		);
 
-		// Create a channel for the PV
-		pvac::ClientChannel channel(provider.connect(pv_name));
+		// Create channel for the pv
+		pvac::ClientChannel channel;
+		try {
+		    channel = pvac::ClientChannel(provider.connect(pv_name));
+		    std::cout << "Connected to " << channel.name() << std::endl;
+		} catch (const std::exception &e) {
+		    err_ss.clear();
+		    err_ss << e.what() << std::endl;
+		    err_ss << "Failed to connect to pv" << "'" << pv_name << "'" << std::endl;
+		    throw std::runtime_error(err_ss.str());
+		}
 		
 		// Check type match
 		err_ss.clear();
