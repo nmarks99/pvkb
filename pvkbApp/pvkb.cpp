@@ -12,9 +12,11 @@
 #include <pv/caProvider.h>
 
 #include "toml++/toml.hpp"
+#include "argh.h"
 
 using VarType = std::variant<int, double, bool, std::string>;
 using TupleVal = std::tuple<pvac::ClientChannel, VarType, bool>;
+
 
 // Returns the value of the optional if present,
 // otherwise panics with the given message
@@ -29,6 +31,7 @@ T expect(std::optional<T> optional, const std::string &msg) {
 
 // Returns an optional char given a string like "key_a" 
 // which can be interpreted by ncurses getch()
+// TODO: Add more special characters (space, enter, etc.)
 std::optional<char> to_key_char(const std::string_view str) {
     
     static constexpr std::string_view key_prefix = "key_";
@@ -136,7 +139,7 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	    // key is e.g. 'key_right'
 	    // value is e.g. '{pv="m1.TWF", value=1}'
 	    std::cout << key << ": ";
-	    std::cout << *value.as_table() << std::endl;
+	    std::cout << *value.as_table() << " -> ";
 	    const auto keybind = *value.as_table();
 
 	    // Get the name of the PV to write to
@@ -191,7 +194,7 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
     if (auto put_array = tbl["put"].as_array()) {
 	for (const auto &item: *put_array) {
 	    if (auto table = item.as_table()) {
-		std::cout << *table << std::endl;
+		std::cout << *table << " -> ";
 		
 		// Get the PV name
 		std::string pv_name = expect(table->get("pv")->value<std::string>(),"Bad or missing PV name");
@@ -238,29 +241,43 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
     }
 }
 
+
 int main(int argc, char *argv[]) {
 
-    if (argc <= 1) {
-	std::cerr << "Please provide toml file" << std::endl;
+    // Parse command line arguments
+    // Command line args take precedence over config file
+    argh::parser cmdl;
+    cmdl.add_params({"-p","--prefix"});
+    cmdl.parse(argc, argv);
+    
+    // Path to TOML config file is first positional arg
+    const std::string toml_path = cmdl[1];
+    if (!toml_path.length()) {
+	std::cerr << "Please provide a TOML configuration file\n";
 	return 1;
     }
-
-    // parse the toml file into a toml::table
+    
+    // Named argument for IOC prefix
+    std::string ioc_prefix = cmdl({"-p","--prefix"}).str();
+    
+    // Parse the TOML config file into a toml::table
     toml::table tbl;
     try {
-        tbl = toml::parse_file(argv[1]);
+        tbl = toml::parse_file(toml_path);
     } catch (const toml::parse_error& err) {
         std::cerr << "Parsing failed:\n" << err << "\n";
         return 1;
     }
-    
+
+    // Get IOC prefix from config file if not overridden
+    if (ioc_prefix.empty()) {
+	ioc_prefix = tbl["prefix"].value_or("");
+    }
+
     // Get the provider "ca" or "pva", default: "ca"
     epics::pvAccess::ca::CAClientFactory::start();
     const std::optional<std::string> provider_name = tbl["provider"].value_or("ca");
     pvac::ClientProvider provider(provider_name.value());
-
-    // Get the IOC prefix
-    std::string ioc_prefix = tbl["prefix"].value_or("");
 
     // Execute requested puts before running main loop
     do_prelim_puts(tbl, provider, ioc_prefix);
