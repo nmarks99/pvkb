@@ -1,13 +1,17 @@
 # Default IOC prefix used for all bindings
 prefix = "myIOCPrefix:"
 
-# (Optional) Can use either PV Access (pva) or Channel Access (ca)
+# Can use either PV Access (pva) or Channel Access (ca)
 provider = "ca"
+
+# Character used to quit the program
+quit = 'q'
 
 # Execute these CA/PVA puts at the start of the program
 put = [
-    {pv="m1.DESC", value="My Motor"},
-    {pv="m1.HLM", value=100},
+    {pv="m1.DESC", value="Motor 1"},
+    {pv="m1.HLM", value=100.0},
+    {pv="m1.SPMG", value=3},
 ]
 
 [keybindings]

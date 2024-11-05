@@ -94,7 +94,6 @@ std::optional<std::string> get_variant_type(const VarType& value) {
     return result.length() > 0 ? std::optional<std::string>(result) : std::nullopt;
 }
 
-
 // Returns true if the string names of pv_type and var_type are agreeable
 bool check_type_match(const std::string &pv_type, const std::string &var_type) {
 
@@ -160,23 +159,23 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	    const char key_char = expect(to_key_char(key), "Invalid key");
 
 	    // Get type of PV
-	    const std::string pv_type = expect(get_pv_type(channel),"PV is not a supported type");
+	    const std::string pv_type_str = expect(get_pv_type(channel),"PV is not a supported type");
 
 	    // Get variant value pv target value from toml node
 	    VarType pv_val = expect(extract_variant_value(*keybind["value"].node()), "Invalid value");
-	    const std::string var_type = expect(get_variant_type(pv_val),
+	    const std::string var_type_str = expect(get_variant_type(pv_val),
 					 "get_variant_type() failed. Check type of pv value");
 	
-	    // Ensure desired value type matches PV type
-	    if (not check_type_match(pv_type, var_type)) {
-		throw std::runtime_error("Type mismatch between target value and PV value");
-	    }
-
 	    // Get flag for increment mode (default: false)
 	    // only supported for numbers, not strings
 	    bool increment = false;
-	    if (var_type == "int" or var_type == "double") {
+	    if (var_type_str == "int" or var_type_str == "double") {
 		increment = keybind["increment"].value<bool>().value_or(false);
+	    }
+
+	    // Ensure desired value type matches PV type
+	    if (not check_type_match(pv_type_str, var_type_str)) {
+		throw std::runtime_error("Type mismatch between target value and PV value");
 	    }
 
 	    // add keybinding to the map
@@ -187,6 +186,38 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
     }
 
     return channel_map;
+}
+
+// Executes a ca/pva put of the given value to the given channel
+// We assume that the PV and value types match
+void execute_put(pvac::ClientChannel &channel, VarType val, bool increment=false) {
+    const std::string pv_type_str = expect(get_pv_type(channel), "Failed to get pv_type_str");
+    const std::string var_type_str = expect(get_variant_type(val), "Failed to get var_type_str");
+
+    std::string target_field = "value";
+    if (pv_type_str == "enum_t") {
+	target_field = "value.index";
+    }
+    
+    if (increment) {
+	if (var_type_str == "int") {
+	    const int current_val = channel.get()->getSubFieldT<epics::pvData::PVInt>("value")->getAs<int>();
+	    const int inc_val = std::get<int>(val);
+	    channel.put().set(target_field, current_val + inc_val).exec();
+	} else {
+	    const double current_val = channel.get()->getSubFieldT<epics::pvData::PVDouble>("value")->getAs<double>();
+	    const double inc_val = std::get<double>(val);
+	    channel.put().set(target_field, current_val + inc_val).exec();
+	}
+    } else {
+	if (var_type_str == "int") {
+	    channel.put().set(target_field, std::get<int>(val)).exec();
+	} else if (var_type_str == "double") {
+	    channel.put().set(target_field, std::get<double>(val)).exec();
+	} else if (var_type_str == "string") {
+	    channel.put().set(target_field, std::get<std::string>(val)).exec();
+	} 
+    }
 }
 
 // Executes the ca/pva puts to the PVs specfied in the put array in toml file
@@ -215,32 +246,21 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
 		} catch (const std::exception &e) {
 		    throw std::runtime_error("Failed to connect to PV");
 		}
-		
-		// Check type match
-		std::string pv_type = expect(get_pv_type(channel), "Invalid PV type");
-		std::string var_type = expect(get_variant_type(val), "Invalid value type"); 
-		if (not check_type_match(pv_type, var_type)) {
+
+		// Ensure desired value type matches PV type
+		const std::string pv_type_str = expect(get_pv_type(channel), "Failed to get pv_type_str");
+		const std::string var_type_str = expect(get_variant_type(val), "Failed to get var_type_str");
+		if (not check_type_match(pv_type_str, var_type_str)) {
 		    throw std::runtime_error("Type mismatch between target value and PV value");
 		}
-
-		if (var_type == "int") {
-		    if (pv_type == "enum_t") {
-			channel.put().set("value.index", std::get<int>(val)).exec();
-		    }  else {
-			channel.put().set("value", std::get<int>(val)).exec();
-		    }
-		} else if (var_type == "double") {
-		    channel.put().set("value", static_cast<double>(std::get<double>(val))).exec();
-		} else if (var_type == "string") {
-		    channel.put().set("value", static_cast<std::string>(std::get<std::string>(val))).exec();
-		}
-
+	    
+		// Puts the value to the channel, assumes the types match
+		execute_put(channel, val);
 	    }
 	    
 	} 
     }
 }
-
 
 int main(int argc, char *argv[]) {
 
@@ -273,6 +293,9 @@ int main(int argc, char *argv[]) {
     if (ioc_prefix.empty()) {
 	ioc_prefix = tbl["prefix"].value_or("");
     }
+    
+    // Get character used to quit the program
+    int quit_val = static_cast<int>(*tbl["quit"].value_or("q"));
 
     // Get the provider "ca" or "pva", default: "ca"
     epics::pvAccess::ca::CAClientFactory::start();
@@ -289,50 +312,27 @@ int main(int argc, char *argv[]) {
     initscr();
     keypad(stdscr, TRUE);
     noecho();
-    
+   
+    // Listen for keypresses and execute requested puts
     while (true) {
 	int ch = getch();
-	if (ch == 'q') {
+	if (ch == quit_val) {
 	    break;
 	}
 
 	if (channel_map.count(ch) > 0) {
-	    pvac::ClientChannel channel = std::get<0>(channel_map[ch]);
-	    VarType val_vnt = std::get<1>(channel_map[ch]);
-	    const std::string pv_type_str = expect(get_pv_type(channel), "Failed to get pv_type_str");
-	    const std::string var_type_str = expect(get_variant_type(val_vnt), "Failed to get var_type_str");
-	    
-	    // increment mode
-	    if (std::get<2>(channel_map[ch])) {
-		if (var_type_str == "int") {
-		    const int current_val = channel.get()->getSubFieldT<epics::pvData::PVInt>("value")->getAs<int>();
-		    const int inc_val = std::get<int>(val_vnt);
-		    channel.put().set("value", current_val + inc_val).exec();
-		} else if (var_type_str == "double") {
-		    const double current_val = channel.get()->getSubFieldT<epics::pvData::PVDouble>("value")->getAs<double>();
-		    const double inc_val = std::get<double>(val_vnt);
-		    channel.put().set("value", current_val + inc_val).exec();
-		} 
-	    } else { // standard write mode
-		if (var_type_str == "int") {
-		    if (pv_type_str == "enum_t") {
-			channel.put().set("value.index", std::get<int>(val_vnt)).exec();
-		    } else {
-			channel.put().set("value", std::get<int>(val_vnt)).exec();
-		    }
-		} else if (var_type_str == "double") {
-		    channel.put().set("value", std::get<double>(val_vnt)).exec();
-		} else if (var_type_str == "string") {
-		    channel.put().set("value", std::get<std::string>(val_vnt)).exec();
-		}
-	    }
-
+	    const TupleVal key_tuple = channel_map.at(ch);
+	    pvac::ClientChannel channel = std::get<0>(key_tuple);
+	    const VarType val = std::get<1>(key_tuple);
+	    const bool increment = std::get<2>(key_tuple);
+	    execute_put(channel, val, increment);
 	}
-	
+
 	refresh();
     }
     endwin();
 
     return 0;
 }
+
 
