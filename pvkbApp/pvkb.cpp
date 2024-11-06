@@ -31,7 +31,6 @@ T expect(std::optional<T> optional, const std::string &msg) {
 
 // Returns an optional char given a string like "key_a" 
 // which can be interpreted by ncurses getch()
-// TODO: Add more special characters (space, enter, etc.)
 std::optional<char> to_key_char(const std::string_view str) {
     
     static constexpr std::string_view key_prefix = "key_";
@@ -54,9 +53,13 @@ std::optional<char> to_key_char(const std::string_view str) {
 	return KEY_RIGHT;
     } else if (tmp_str == "left") {
 	return KEY_LEFT;
+    } else if (tmp_str == "enter") {
+	return '\n';
+    } else if (tmp_str == "space") {
+	return ' ';
     } else if (tmp_str.length() > 1) {
 	return std::nullopt;
-    } else {
+    } else { // alphanumeric char ('a','b',1,2,etc.)
 	const char alpha = tmp_str.at(0);
 	return std::isalnum(alpha) ? std::optional<char>(alpha) : std::nullopt;
     }
@@ -147,11 +150,13 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	    // Create channel for the pv
 	    pvac::ClientChannel channel;
 	    pv_name =  ioc_prefix + pv_name;
+	    std::cout << "Connecting to " << pv_name << "... " << std::flush;
 	    try {
 		channel = pvac::ClientChannel(provider.connect(pv_name));
 		channel.get();
-		std::cout << "Connected to " << channel.name() << std::endl;
+		std::cout << "Connected!" << std::endl;
 	    } catch (const std::exception &e) {
+		std::cout << std::endl;
 		throw std::runtime_error("Failed to connect to PV");
 	    }
 
@@ -230,22 +235,24 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
 		// Get the PV name
 		std::string pv_name = expect(table->get("pv")->value<std::string>(),"Bad or missing PV name");
 		pv_name = ioc_prefix + pv_name;
-
-		// Get the PV target value
-		VarType val = expect(
-		    extract_variant_value(*table->get("value")),
-		    "Bad or missing value in put list"
-		);
+		std::cout << "Connecting to " << pv_name << "... " << std::flush;
 
 		// Create channel for the pv
 		pvac::ClientChannel channel;
 		try {
 		    channel = pvac::ClientChannel(provider.connect(pv_name));
 		    channel.get();
-		    std::cout << "Connected to " << channel.name() << std::endl;
+		    std::cout << "Connected!" << std::endl;
 		} catch (const std::exception &e) {
+		    std::cout << std::endl;
 		    throw std::runtime_error("Failed to connect to PV");
 		}
+
+		// Get the PV target value
+		VarType val = expect(
+		    extract_variant_value(*table->get("value")),
+		    "Bad or missing value in put list"
+		);
 
 		// Ensure desired value type matches PV type
 		const std::string pv_type_str = expect(get_pv_type(channel), "Failed to get pv_type_str");
@@ -259,6 +266,35 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
 	    }
 	    
 	} 
+    }
+}
+
+void show_keybindings(const toml::table &tbl) {
+    init_pair(1, COLOR_BLUE, COLOR_BLACK);
+    auto keybindings = tbl["keybindings"].as_table();
+    const char quit_char = *tbl["quit"].value_or("q");
+    attron(COLOR_PAIR(1));
+    printw("--------------\n");
+    printw("     PVKB\n");
+    printw("--------------\n");
+    attroff(COLOR_PAIR(1));
+    printw("Type %c to quit\n\n", quit_char);
+    attron(A_ITALIC);
+    attron(A_BOLD);
+    printw("Keybindings:\n");
+    attroff(A_ITALIC);
+    attroff(A_BOLD);
+    for (const auto &entry : *keybindings) {
+        std::stringstream ss;
+        auto entry_table = *entry.second.as_table();
+        ss << entry.first.str() << ": ";
+        if (entry_table["increment"]) {
+            ss << entry_table["pv"] << " += ";
+        } else {
+            ss << entry_table["pv"] << " = ";
+        }
+        ss << entry_table["value"] << std::endl;
+	printw("%s",ss.str().c_str());
     }
 }
 
@@ -276,7 +312,7 @@ int main(int argc, char *argv[]) {
 	std::cerr << "Please provide a TOML configuration file\n";
 	return 1;
     }
-    
+
     // Named argument for IOC prefix
     std::string ioc_prefix = cmdl({"-p","--prefix"}).str();
     
@@ -295,7 +331,7 @@ int main(int argc, char *argv[]) {
     }
     
     // Get character used to quit the program
-    int quit_val = static_cast<int>(*tbl["quit"].value_or("q"));
+    const char quit_char = *tbl["quit"].value_or("q");
 
     // Get the provider "ca" or "pva", default: "ca"
     epics::pvAccess::ca::CAClientFactory::start();
@@ -308,15 +344,19 @@ int main(int argc, char *argv[]) {
     // Get the mapping key_char -> (pv channel, pv value, increment=true/false)
     std::map<char, TupleVal> channel_map = parse_keybindings(tbl, provider, ioc_prefix);
     
-    // initialize ncurses
+    // Initialize ncurses
     initscr();
     keypad(stdscr, TRUE);
     noecho();
-   
+    start_color();
+
+    // Print out active keybindings
+    show_keybindings(tbl);
+
     // Listen for keypresses and execute requested puts
     while (true) {
 	int ch = getch();
-	if (ch == quit_val) {
+	if (ch == quit_char) {
 	    break;
 	}
 

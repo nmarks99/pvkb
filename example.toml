@@ -14,6 +14,7 @@ put = [
     {pv="m1.SPMG", value=3},
 ]
 
+# Keybindings to create. This is the only required section
 [keybindings]
 key_right = {pv="m1.TWF", value=1}
 key_left = {pv="m1.TWR", value=1}
