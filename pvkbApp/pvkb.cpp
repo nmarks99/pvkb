@@ -1,4 +1,5 @@
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -14,8 +15,12 @@
 #include "toml++/toml.hpp"
 #include "argh.h"
 
-using VarType = std::variant<int, double, bool, std::string>;
-using TupleVal = std::tuple<pvac::ClientChannel, VarType, bool>;
+// Stores the value field of keybinding with the appropriate type
+// e.g. key_right = {pv="m1.TWF", value=1} 
+using TargetVar = std::variant<int, double, bool, std::string>;
+
+// Keybinding tuple (PVA channel, target value, boolean increment)
+using TupleVal = std::tuple<pvac::ClientChannel, TargetVar, bool>;
 
 
 // Returns the value of the optional if present,
@@ -79,7 +84,7 @@ std::optional<std::string> get_pv_type(pvac::ClientChannel &channel) {
 
 // Returns an optional string of the type name of a variant
 // with possible types int, double, bool, or string
-std::optional<std::string> get_variant_type(const VarType& value) {
+std::optional<std::string> get_variant_type(const TargetVar& value) {
     std::string result;
     auto visitor = [&](auto&& arg) {
         using T = std::decay_t<decltype(arg)>; // Get the type of the argument
@@ -108,7 +113,7 @@ bool check_type_match(const std::string &pv_type, const std::string &var_type) {
 	type_match = (var_type == "bool");
     } else if (pv_type == "string") {
 	type_match = (var_type == "string");
-    } else {
+    } else { // pv could be a variety of integer types like byte, short, long, ubyte, etc.
 	type_match = (var_type == "int");
     } 
 
@@ -117,7 +122,7 @@ bool check_type_match(const std::string &pv_type, const std::string &var_type) {
 
 // Attempts to store the value of the given toml::node in one of
 // string, integer, double, bool as a optional variant
-std::optional<VarType> extract_variant_value(const toml::node &node) {
+std::optional<TargetVar> extract_variant_value(const toml::node &node) {
     if (node.is_string()) {
 	return *node.value<std::string>();
     } else if (node.is_integer()) {
@@ -140,8 +145,8 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	for (const auto &[key, value] : *keybindings_tbl) {
 	    // key is e.g. 'key_right'
 	    // value is e.g. '{pv="m1.TWF", value=1}'
-	    std::cout << key << ": ";
-	    std::cout << *value.as_table() << " -> ";
+	    // std::cout << key << ": ";
+	    // std::cout << *value.as_table() << " -> ";
 	    const auto keybind = *value.as_table();
 
 	    // Get the name of the PV to write to
@@ -150,13 +155,10 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	    // Create channel for the pv
 	    pvac::ClientChannel channel;
 	    pv_name =  ioc_prefix + pv_name;
-	    std::cout << "Connecting to " << pv_name << "... " << std::flush;
 	    try {
 		channel = pvac::ClientChannel(provider.connect(pv_name));
 		channel.get();
-		std::cout << "Connected!" << std::endl;
 	    } catch (const std::exception &e) {
-		std::cout << std::endl;
 		throw std::runtime_error("Failed to connect to PV");
 	    }
 
@@ -167,7 +169,7 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 	    const std::string pv_type_str = expect(get_pv_type(channel),"PV is not a supported type");
 
 	    // Get variant value pv target value from toml node
-	    VarType pv_val = expect(extract_variant_value(*keybind["value"].node()), "Invalid value");
+	    TargetVar pv_val = expect(extract_variant_value(*keybind["value"].node()), "Invalid value");
 	    const std::string var_type_str = expect(get_variant_type(pv_val),
 					 "get_variant_type() failed. Check type of pv value");
 	
@@ -195,7 +197,7 @@ std::map<char, TupleVal> parse_keybindings(const toml::table &tbl, pvac::ClientP
 
 // Executes a ca/pva put of the given value to the given channel
 // We assume that the PV and value types match
-void execute_put(pvac::ClientChannel &channel, VarType val, bool increment=false) {
+void execute_put(pvac::ClientChannel &channel, TargetVar val, bool increment=false) {
     const std::string pv_type_str = expect(get_pv_type(channel), "Failed to get pv_type_str");
     const std::string var_type_str = expect(get_variant_type(val), "Failed to get var_type_str");
 
@@ -230,26 +232,22 @@ void do_prelim_puts(const toml::table &tbl, pvac::ClientProvider &provider, cons
     if (auto put_array = tbl["put"].as_array()) {
 	for (const auto &item: *put_array) {
 	    if (auto table = item.as_table()) {
-		std::cout << *table << " -> ";
 		
 		// Get the PV name
 		std::string pv_name = expect(table->get("pv")->value<std::string>(),"Bad or missing PV name");
 		pv_name = ioc_prefix + pv_name;
-		std::cout << "Connecting to " << pv_name << "... " << std::flush;
 
 		// Create channel for the pv
 		pvac::ClientChannel channel;
 		try {
 		    channel = pvac::ClientChannel(provider.connect(pv_name));
 		    channel.get();
-		    std::cout << "Connected!" << std::endl;
 		} catch (const std::exception &e) {
-		    std::cout << std::endl;
 		    throw std::runtime_error("Failed to connect to PV");
 		}
 
 		// Get the PV target value
-		VarType val = expect(
+		TargetVar val = expect(
 		    extract_variant_value(*table->get("value")),
 		    "Bad or missing value in put list"
 		);
@@ -285,15 +283,17 @@ void show_keybindings(const toml::table &tbl) {
     attroff(A_ITALIC);
     attroff(A_BOLD);
     for (const auto &entry : *keybindings) {
-        std::stringstream ss;
+	std::stringstream ss;
         auto entry_table = *entry.second.as_table();
-        ss << entry.first.str() << ": ";
-        if (entry_table["increment"]) {
-            ss << entry_table["pv"] << " += ";
-        } else {
-            ss << entry_table["pv"] << " = ";
-        }
-        ss << entry_table["value"] << std::endl;
+	ss << entry.first.str() << ": ";
+	if (entry_table["increment"]) {
+	    ss << entry_table["pv"] << " += ";
+	} else {
+	    ss << entry_table["pv"] << " = ";
+	}
+	if (entry_table["value"].value<float>().has_value()) {
+	    ss << entry_table["value"].value<float>().value() << std::endl;
+	}
 	printw("%s",ss.str().c_str());
     }
 }
@@ -363,7 +363,7 @@ int main(int argc, char *argv[]) {
 	if (channel_map.count(ch) > 0) {
 	    const TupleVal key_tuple = channel_map.at(ch);
 	    pvac::ClientChannel channel = std::get<0>(key_tuple);
-	    const VarType val = std::get<1>(key_tuple);
+	    const TargetVar val = std::get<1>(key_tuple);
 	    const bool increment = std::get<2>(key_tuple);
 	    execute_put(channel, val, increment);
 	}
